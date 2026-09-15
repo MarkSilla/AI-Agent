@@ -7,8 +7,9 @@ import java.net.URL
 import java.net.URLEncoder
 
 object AgentApi {
-private const val API_BASE_URL =
-    "https://api-v2.appdeploy.ai/app/my-ai-agent-38a3kw/api/agent/chat""
+
+    private const val API_BASE_URL =
+        "https://my-ai-agent-38a3kw.v2.appdeploy.ai/api/agent/chat"
 
     fun sendMessage(
         messages: List<AgentMessage>,
@@ -49,8 +50,7 @@ private const val API_BASE_URL =
                 jsonMemory.put(item)
             }
 
-        // URL-encode the JSON so it can safely be sent
-        // through the GET query parameters.
+        // Encode JSON for URL query parameters
         val encodedMessages =
             URLEncoder.encode(
                 jsonMessages.toString(),
@@ -63,14 +63,20 @@ private const val API_BASE_URL =
                 Charsets.UTF_8.name()
             )
 
-        // AppDeploy GET endpoint
+        // Cache-busting value
+        val nonce = System.currentTimeMillis()
+
         val apiUrl =
-            "$API_BASE_URL?messages=$encodedMessages&memory=$encodedMemory"
+            "$API_BASE_URL" +
+            "?messages=$encodedMessages" +
+            "&memory=$encodedMemory" +
+            "&nonce=$nonce"
 
         val connection =
             URL(apiUrl).openConnection() as HttpURLConnection
 
         try {
+
             connection.requestMethod = "GET"
             connection.connectTimeout = 20_000
             connection.readTimeout = 60_000
@@ -82,14 +88,17 @@ private const val API_BASE_URL =
             )
 
             connection.setRequestProperty(
-                "User-Agent",
-                "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
+                "Cache-Control",
+                "no-cache"
             )
 
-            // Get HTTP status
+            connection.setRequestProperty(
+                "Pragma",
+                "no-cache"
+            )
+
             val status = connection.responseCode
 
-            // Read normal response or error response
             val stream =
                 if (status in 200..299) {
                     connection.inputStream
@@ -103,47 +112,50 @@ private const val API_BASE_URL =
                     ?.use { it.readText() }
                     ?: ""
 
-            // Handle HTTP errors
+            // HTTP error
             if (status !in 200..299) {
 
-                val serverMessage =
-                    try {
-                        if (responseText.isNotBlank()) {
-
-                            val errorJson =
-                                JSONObject(responseText)
-
-                            errorJson.optString(
-                                "message",
-                                responseText
-                            )
-
-                        } else {
-                            "No error message returned by server."
-                        }
-
-                    } catch (_: Exception) {
-
-                        responseText.ifBlank {
-                            "No error message returned by server."
-                        }
-                    }
+                val preview =
+                    responseText
+                        .replace("\n", " ")
+                        .take(500)
 
                 throw Exception(
-                    "Server returned HTTP $status\n\n$serverMessage"
+                    "Server returned HTTP $status\n\n$preview"
                 )
             }
 
-            // Handle empty response
             if (responseText.isBlank()) {
                 throw Exception(
                     "Server returned an empty response."
                 )
             }
 
-            // Parse JSON response
+            // Detect HTML instead of JSON
+            val trimmedResponse =
+                responseText.trim()
+
+            if (
+                trimmedResponse.startsWith("<!doctype", ignoreCase = true) ||
+                trimmedResponse.startsWith("<html", ignoreCase = true) ||
+                trimmedResponse.startsWith("<", ignoreCase = false)
+            ) {
+                throw Exception(
+                    "The AI backend returned an HTML page instead of JSON.\n\n" +
+                    trimmedResponse.take(500)
+                )
+            }
+
+            // Parse JSON
             val response =
-                JSONObject(responseText)
+                try {
+                    JSONObject(trimmedResponse)
+                } catch (e: Exception) {
+                    throw Exception(
+                        "The AI backend returned invalid JSON.\n\n" +
+                        trimmedResponse.take(500)
+                    )
+                }
 
             val text =
                 response.optString("text")
