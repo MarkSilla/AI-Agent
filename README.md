@@ -1,12 +1,14 @@
-# My AI Agent
+# My AI Agent Android APK
 
-Native Android APK foundation.
+Native Android Jetpack Compose project for the My AI Agent app.
 
-- Jetpack Compose chat UI
-- Voice input
-- Text-to-speech
-- GitHub Actions APK build
+Current milestone:
+- Premium dark/glass mobile chat UI
+- Chat drawer and settings surface
+- Voice input and text-to-speech hooks
+- Java/Kotlin JVM 17 alignment
+- Kotlin 2.0 Compose compiler plugin
+- Unit tests for send-state behavior
+- GitHub Actions debug APK build
 
-This is a native Android project, not a website. The current reply engine is a local placeholder; the live AI backend will be connected in the next stage.
-
-Never embed private AI API keys in the APK. Use a secure backend.
+The live AI backend and privileged Android agent actions are intentionally separate integrations and are not faked by this UI shell.
