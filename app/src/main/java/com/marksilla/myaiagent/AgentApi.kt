@@ -7,9 +7,8 @@ import java.net.URL
 import java.net.URLEncoder
 
 object AgentApi {
-
-    private const val API_BASE_URL =
-        "https://my-ai-agent-38a3kw.v2.appdeploy.ai/api/agent/chat"
+private const val API_BASE_URL =
+    "https://api-v2.appdeploy.ai/app/my-ai-agent-38a3kw/api/agent/chat""
 
     fun sendMessage(
         messages: List<AgentMessage>,
