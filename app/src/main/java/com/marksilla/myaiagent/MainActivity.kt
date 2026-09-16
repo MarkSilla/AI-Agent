@@ -1,16 +1,25 @@
 package com.marksilla.myaiagent
 
+import android.Manifest
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.speech.RecognizerIntent
 import android.speech.tts.TextToSpeech
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import com.marksilla.auraagent.AuraService
 import com.marksilla.myaiagent.ui.AgentComposer
 import com.marksilla.myaiagent.ui.AgentDrawerContent
 import com.marksilla.myaiagent.ui.AgentHeader
@@ -25,6 +34,27 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
 
     private var tts: TextToSpeech? = null
+    private var pendingAuraStart = false
+    private var onAuraStarted: (() -> Unit)? = null
+
+    private val microphonePermissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            if (granted) {
+                continueAuraStartAfterPermission()
+            } else {
+                pendingAuraStart = false
+                onAuraStarted = null
+                Toast
+                    .makeText(
+                        this,
+                        "Microphone permission is required for AURA.",
+                        Toast.LENGTH_SHORT
+                    )
+                    .show()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,11 +67,37 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             AgentTheme {
+                var isAuraEnabled by remember {
+                    mutableStateOf(isAuraEnabled())
+                }
+
                 AgentApp(
+                    isAuraEnabled = isAuraEnabled,
                     onSpeak = { speak(it) },
-                    onVoice = { launchVoiceInput() }
+                    onVoice = { launchVoiceInput() },
+                    onStartAura = {
+                        startAuraWithPermissions {
+                            isAuraEnabled = true
+                        }
+                    },
+                    onStopAura = {
+                        stopAuraService()
+                        isAuraEnabled = false
+                    }
                 )
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+
+        if (
+            pendingAuraStart &&
+            hasRecordAudioPermission() &&
+            Settings.canDrawOverlays(this)
+        ) {
+            startAuraService()
         }
     }
 
@@ -73,17 +129,106 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun startAuraWithPermissions(onStarted: () -> Unit) {
+        pendingAuraStart = true
+        onAuraStarted = onStarted
+
+        if (!hasRecordAudioPermission()) {
+            microphonePermissionLauncher.launch(
+                Manifest.permission.RECORD_AUDIO
+            )
+            return
+        }
+
+        continueAuraStartAfterPermission()
+    }
+
+    private fun continueAuraStartAfterPermission() {
+        if (!Settings.canDrawOverlays(this)) {
+            Toast
+                .makeText(
+                    this,
+                    "Allow display over other apps to show AURA.",
+                    Toast.LENGTH_SHORT
+                )
+                .show()
+
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+            )
+            return
+        }
+
+        startAuraService()
+    }
+
+    private fun startAuraService() {
+        pendingAuraStart = false
+
+        ContextCompat.startForegroundService(
+            this,
+            Intent(this, AuraService::class.java).apply {
+                action = AuraService.ACTION_START
+            }
+        )
+
+        setAuraEnabled(true)
+        onAuraStarted?.invoke()
+        onAuraStarted = null
+    }
+
+    private fun stopAuraService() {
+        pendingAuraStart = false
+        onAuraStarted = null
+
+        stopService(
+            Intent(this, AuraService::class.java).apply {
+                action = AuraService.ACTION_STOP
+            }
+        )
+
+        setAuraEnabled(false)
+    }
+
+    private fun hasRecordAudioPermission(): Boolean =
+        ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+
+    private fun isAuraEnabled(): Boolean =
+        getSharedPreferences(AURA_PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_AURA_ENABLED, false)
+
+    private fun setAuraEnabled(enabled: Boolean) {
+        getSharedPreferences(AURA_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_AURA_ENABLED, enabled)
+            .apply()
+    }
+
     override fun onDestroy() {
         tts?.stop()
         tts?.shutdown()
         super.onDestroy()
     }
+
+    companion object {
+        private const val AURA_PREFS = "aura_preferences"
+        private const val KEY_AURA_ENABLED = "aura_enabled"
+    }
 }
 
 @Composable
 private fun AgentApp(
+    isAuraEnabled: Boolean,
     onSpeak: (String) -> Unit,
-    onVoice: () -> Unit
+    onVoice: () -> Unit,
+    onStartAura: () -> Unit,
+    onStopAura: () -> Unit
 ) {
     var drawerOpen by remember {
         mutableStateOf(false)
@@ -229,19 +374,44 @@ private fun AgentApp(
                     )
 
                     Text(
-                        text = "Permission Center",
+                        text = "AURA Voice Activation",
                         fontWeight =
                             androidx.compose.ui.text.font.FontWeight.SemiBold
                     )
 
                     Text(
-                        text =
-                            "Android permissions and agent capabilities will appear here as they are connected.",
+                        text = if (isAuraEnabled) {
+                            "AURA is active"
+                        } else {
+                            "AURA is off"
+                        },
 
                         color =
                             MaterialTheme.colorScheme
                                 .onSurfaceVariant
                     )
+
+                    Spacer(
+                        modifier = Modifier.height(18.dp)
+                    )
+
+                    Button(
+                        onClick = {
+                            if (isAuraEnabled) {
+                                onStopAura()
+                            } else {
+                                onStartAura()
+                            }
+                        }
+                    ) {
+                        Text(
+                            if (isAuraEnabled) {
+                                "Stop AURA"
+                            } else {
+                                "Enable AURA"
+                            }
+                        )
+                    }
 
                     Spacer(
                         modifier = Modifier.height(18.dp)
